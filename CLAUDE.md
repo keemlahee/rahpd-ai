@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 프로젝트는 `youtube-auto-editor/` 하나입니다. 영상을 올리면 전사, 1차 컷 편집, MZ 말투 자막, 일러스트, 예능 효과, 개인정보 모자이크까지 처리하는 로컬 웹 앱(FastAPI + 순수 JS)입니다. 사용자 설명서는 `youtube-auto-editor/README.md`에 있습니다.
 
-Windows 전용입니다. `app/media.py`가 `msvcrt`와 `_winapi`로 큰 파이프를 만들고, `config.find_tool`은 winget 설치 경로에서 ffmpeg를 찾습니다.
+Windows용으로 만들었지만 리눅스에서도 돕니다. 윈도우에서는 `app/media.py`가 `msvcrt`와 `_winapi`로 큰 파이프를 만들고, `config.find_tool`은 winget 설치 경로에서 ffmpeg를 찾습니다. 리눅스에서는 `os.pipe`를 `F_SETPIPE_SZ`로 키워 쓰고 ffmpeg는 PATH에서 찾습니다. `install.bat`은 윈도우 전용이라 리눅스에서는 `.venv`(`pip install -r requirements.txt`)와 글꼴을 직접 준비합니다. 글꼴은 `config.find_font`가 윈도우 글꼴 폴더 다음으로 `assets/fonts`, `~/.local/share/fonts`, `/usr/share/fonts`에서 같은 파일 이름(`NotoSansKR-VF.ttf`, `NotoSerifKR-VF.ttf`)을 찾고, 맑은 고딕 굵게가 없으면 `NanumGothicBold.ttf`를 씁니다.
 
 ## 명령어
 
