@@ -1,0 +1,14 @@
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
+python-dotenv>=1.0
+numpy>=1.26
+opencv-python-headless>=4.9
+pillow>=10.3
+faster-whisper>=1.1
+rapidocr>=3.0
+onnxruntime>=1.18
+anthropic>=1.0
+openai>=1.60
+resvg-py>=0.1
+pytest>=8.0

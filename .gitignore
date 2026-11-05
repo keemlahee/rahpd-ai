@@ -1,0 +1,19 @@
+# 비밀 값
+.env
+.env.*
+
+# 파이썬
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 내려받은 모델, 업로드한 영상, 작업 결과
+youtube-auto-editor/models/
+youtube-auto-editor/uploads/
+youtube-auto-editor/workspace/
+youtube-auto-editor/tests/received.json
+
+# 이 PC 전용 설정
+.claude/launch.json
+.claude/settings.local.json

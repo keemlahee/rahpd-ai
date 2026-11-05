@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>유튜브 자동 편집</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>🎬 유튜브 자동 편집</h1>
+      <p>전사 → 무음/추임새 컷 → 일러스트·오버레이 기획 → 개인정보 모자이크 → 렌더</p>
+    </div>
+    <div class="device" id="device">장치 확인 중</div>
+  </header>
+
+  <main class="layout">
+    <aside class="side">
+      <section class="card">
+        <h2><b>1</b> 영상</h2>
+        <label class="drop" id="drop">
+          <input type="file" id="file" accept="video/*,.mkv" hidden>
+          <span class="drop-main">영상을 여기에 끌어다 놓거나 클릭해서 선택</span>
+          <span class="drop-sub" id="dropInfo">uploads/ 폴더에 저장됩니다</span>
+          <span class="progress" id="uploadBar" hidden><i></i></span>
+        </label>
+        <div class="videos" id="videos"></div>
+        <div class="row">
+          <button class="btn" id="refresh">새로고침</button>
+          <button class="btn" id="clearCache">선택 영상 캐시 삭제</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2><b>⚙</b> 설정 (API 키)</h2>
+        <label class="key">
+          <span>Claude (기획) <em id="claudeState"></em></span>
+          <input id="claudeKey" type="password" placeholder="ANTHROPIC_API_KEY (sk-ant-...)" autocomplete="off">
+        </label>
+        <label class="key">
+          <span>OpenAI (그림 생성) <em id="openaiState"></em></span>
+          <input id="openaiKey" type="password" placeholder="OPENAI_API_KEY (sk-...)" autocomplete="off">
+        </label>
+        <button class="btn primary small" id="saveKeys">저장</button>
+        <p class="hint">.env 파일에 저장됩니다. 비워 두면 기존 값 유지.</p>
+      </section>
+    </aside>
+
+    <div class="main">
+      <section class="card">
+        <h2><b>2</b> 옵션</h2>
+        <div class="checks">
+          <label><input type="checkbox" data-opt="cut"> 무음·추임새 컷</label>
+          <label><input type="checkbox" data-opt="illustrations"> 설명 일러스트</label>
+          <label><input type="checkbox" data-opt="overlays"> 로고·아이콘 오버레이</label>
+          <label><input type="checkbox" data-opt="mosaic"> 개인정보 모자이크</label>
+          <label><input type="checkbox" data-opt="face_mosaic"> 얼굴 모자이크</label>
+          <label><input type="checkbox" data-opt="audio_mute"> 음성 개인정보 음소거</label>
+        </div>
+        <div class="selects">
+          <label>일러스트 위치
+            <select data-opt="illust_position">
+              <option value="center">중앙 카드</option>
+              <option value="right">오른쪽</option>
+              <option value="pip">오른쪽 아래 작게</option>
+              <option value="full">전체 화면</option>
+            </select>
+          </label>
+          <label>Whisper
+            <select data-opt="whisper_model" id="whisperSelect">
+              <option value="">자동</option>
+              <option value="small">small (빠름)</option>
+              <option value="medium">medium</option>
+              <option value="large-v3-turbo">large-v3-turbo</option>
+              <option value="large-v3">large-v3 (정확, 느림)</option>
+            </select>
+          </label>
+          <label>그림 생성
+            <select data-opt="image_provider">
+              <option value="auto">자동</option>
+              <option value="openai">OpenAI</option>
+              <option value="claude">Claude (SVG)</option>
+            </select>
+          </label>
+        </div>
+        <details class="fine">
+          <summary>세부 조절</summary>
+          <div class="numbers">
+            <label>무음 기준(초) <input type="number" step="0.1" min="0.2" max="5" data-opt="silence_min"></label>
+            <label>남길 무음(초) <input type="number" step="0.1" min="0" max="2" data-opt="silence_keep"></label>
+            <label>일러스트/분 <input type="number" step="0.5" min="0" max="6" data-opt="illust_per_min"></label>
+            <label>오버레이/분 <input type="number" step="0.5" min="0" max="12" data-opt="overlay_per_min"></label>
+            <label>OCR 간격(초) <input type="number" step="0.1" min="0.1" max="5" data-opt="ocr_interval"></label>
+            <label>화질(낮을수록 좋음) <input type="number" step="1" min="14" max="30" data-opt="crf"></label>
+          </div>
+          <label class="sub-check"><input type="checkbox" data-opt="pii_claude">
+            이름·주소를 Claude로 추가 판별 <small>(화면 글자가 Claude API로 전송됩니다)</small></label>
+        </details>
+      </section>
+
+      <section class="card">
+        <h2><b>3</b> 실행 <span class="pill" id="jobState">대기</span></h2>
+        <div class="run-row">
+          <button class="btn primary big" id="runAll">▶ 전체 실행</button>
+          <button class="btn danger" id="stop" hidden>■ 중지</button>
+          <label class="force"><input type="checkbox" id="force"> 이 단계 강제 재실행(캐시 무시)</label>
+        </div>
+        <div class="stages" id="stageButtons"></div>
+        <p class="hint">단계 버튼은 앞 단계 결과가 있으면 재사용하고, 없으면 자동으로 먼저 실행합니다.</p>
+        <pre class="log" id="log"></pre>
+      </section>
+
+      <section class="card" id="resultCard">
+        <h2><b>4</b> 결과 <span class="result-name" id="resultName"></span></h2>
+        <nav class="tabs" id="tabs">
+          <button data-tab="video" class="on">영상</button>
+          <button data-tab="report">리포트</button>
+          <button data-tab="edit">기획 수정</button>
+          <button data-tab="images">생성 이미지</button>
+          <button data-tab="script">대본</button>
+        </nav>
+
+        <div class="tab" id="tab-video">
+          <video id="player" controls preload="metadata"></video>
+          <p class="empty" id="videoEmpty">아직 결과 영상이 없습니다.</p>
+          <div class="links" id="links"></div>
+        </div>
+        <div class="tab" id="tab-report" hidden></div>
+        <div class="tab" id="tab-edit" hidden></div>
+        <div class="tab" id="tab-images" hidden></div>
+        <div class="tab" id="tab-script" hidden></div>
+      </section>
+    </div>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
