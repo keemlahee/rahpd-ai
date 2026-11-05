@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 프로젝트는 `youtube-auto-editor/` 하나입니다. 영상을 올리면 전사, 1차 컷 편집, MZ 말투 자막, 일러스트, 예능 효과, 개인정보 모자이크까지 처리하는 로컬 웹 앱(FastAPI + 순수 JS)입니다. 사용자 설명서는 `youtube-auto-editor/README.md`에 있습니다.
 
-Windows 전용입니다. `app/media.py`가 `msvcrt`와 `_winapi`로 큰 파이프를 만들고, `config.find_tool`은 winget 설치 경로에서 ffmpeg를 찾습니다.
+Windows용으로 만들었지만 리눅스에서도 돕니다. 윈도우에서는 `app/media.py`가 `msvcrt`와 `_winapi`로 큰 파이프를 만들고, `config.find_tool`은 winget 설치 경로에서 ffmpeg를 찾습니다. 리눅스에서는 `os.pipe`를 `F_SETPIPE_SZ`로 키워 쓰고 ffmpeg는 PATH에서 찾습니다. `install.bat`은 윈도우 전용이라 리눅스에서는 `.venv`(`pip install -r requirements.txt`)와 글꼴을 직접 준비합니다. 글꼴은 `config.find_font`가 윈도우 글꼴 폴더 다음으로 `assets/fonts`, `~/.local/share/fonts`, `/usr/share/fonts`에서 같은 파일 이름(`NotoSansKR-VF.ttf`, `NotoSerifKR-VF.ttf`)을 찾고, 맑은 고딕 굵게가 없으면 `NanumGothicBold.ttf`를 씁니다.
 
 ## 명령어
 
@@ -68,7 +68,7 @@ install.bat                                    # Python, ffmpeg, VC++ 런타임,
 
 ### 자막과 효과
 
-- `captions.py`: `build_items`가 남은 단어를 조각으로 나누고 `restyle`이 말투를 바꿉니다. 화면과 SRT로 나갈 때는 항상 `for_display`를 거칩니다. 자막에 개인정보가 찍히면 모자이크를 해도 소용없기 때문입니다.
+- `captions.py`: `build_items`가 남은 단어를 조각으로 나누고 `restyle`이 말투를 바꿉니다. `speech_language`가 `ko`가 아니면 원어로 받아쓰고 `restyle(translate=True)`가 `llm.translate_lines`로 한국어로 옮깁니다. 영어는 같은 뜻에 글자가 많아 `FOREIGN_CHARS`로 조각을 길게 묶습니다. `transcribe.VERBATIM_PROMPTS`는 언어별로 따로 둡니다. Whisper는 프롬프트 언어를 따라가서, 한국어 프롬프트를 영어 말에 주면 한국어로 번역해 버립니다. 한국어일 때는 `_params`에 언어 키를 넣지 않아 옵션이 생기기 전의 캐시를 그대로 씁니다. 화면과 SRT로 나갈 때는 항상 `for_display`를 거칩니다. 자막에 개인정보가 찍히면 모자이크를 해도 소용없기 때문입니다.
 - `layout.py`: `scan_people`이 얼굴에서 사람 영역을 추정해 `pii.json`의 `people`에 넣고, `place`가 그 영역과 자막 자리를 피해 위치를 고른 뒤 안 되면 크기를 줄입니다.
 - `fx.py`: 스타일별 허용 효과는 `STYLE_TYPES`입니다. 효과 추가는 이 표, `MAX_SECONDS`, `llm.PLAN_SYSTEM`과 스키마의 enum, `web/app.js`의 `fxNames`를 함께 고칩니다. 효과음은 파형을 계산해 만듭니다.
 

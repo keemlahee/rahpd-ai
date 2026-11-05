@@ -78,14 +78,19 @@ class Project:
     def _uses_openai_transcribe(self) -> bool:
         return self.options["transcribe_engine"] == "openai" and bool(get_key(OPENAI_KEY))
 
+    def _translates(self) -> bool:
+        return self.options["speech_language"] != "ko"
+
     def _params(self, stage: str) -> dict:
         o = self.options
         whisper = OPENAI_MODEL if self._uses_openai_transcribe() else (o["whisper_model"] or DEVICE["default_whisper"])
         fx_on = o["fx_style"] != "off"
+        # 한국어일 때는 키를 넣지 않는다. 옵션이 생기기 전에 만든 캐시를 그대로 쓰기 위해서다.
+        lang = {"lang": o["speech_language"]} if self._translates() else {}
         return {
-            "transcribe": {"model": whisper},
+            "transcribe": {"model": whisper, **lang},
             "cut": {"cut": o["cut"], "min": o["silence_min"], "keep": o["silence_keep"], "llm": llm.available()},
-            "captions": {"mz": o["mz_subtitles"], "llm": llm.available()},
+            "captions": {"mz": o["mz_subtitles"], "llm": llm.available(), **lang},
             "plan": {"i": o["illustrations"], "o": o["overlays"], "ir": o["illust_per_min"], "or": o["overlay_per_min"],
                      "fx": o["fx_style"], "fr": o["fx_per_min"], "llm": llm.available()},
             "images": {"provider": images.resolve_provider(o["image_provider"]) if (o["illustrations"] or o["overlays"]) else ""},
@@ -159,13 +164,13 @@ class Project:
         if self._uses_openai_transcribe():
             try:
                 with self.step(f"전사 (OpenAI {OPENAI_MODEL})"):
-                    data = transcribe_openai(audio, self.log, self.runner)
+                    data = transcribe_openai(audio, self.log, self.runner, self.options["speech_language"])
             except TranscribeError as error:
                 self.log(f"OpenAI 전사 실패, 이 PC에서 전사합니다: {error}")
                 self.retry_next.add("transcribe")
         if data is None:
             with self.step("전사 (이 PC의 Whisper)"):
-                data = transcribe(audio, model, self.info["duration"], self.log, self.runner)
+                data = transcribe(audio, model, self.info["duration"], self.log, self.runner, self.options["speech_language"])
         write_json(self.dir / "transcript.json", data)
 
     def _stage_cut(self, rerun: bool) -> None:
@@ -229,21 +234,23 @@ class Project:
             self.log("웹에서 수정한 자막을 사용합니다.")
             return
         segments = read_json(self.dir / "cut_transcript.json")["segments"]
-        items = captions.build_items(segments)
+        translate, mz = self._translates(), self.options["mz_subtitles"]
+        items = captions.build_items(segments, captions.FOREIGN_CHARS if translate else captions.MAX_CHARS)
         for item in items:
             item["text"] = item["source"]
         warnings = []
-        if self.options["mz_subtitles"] and items:
+        work = "자막 번역" if translate else "자막 말투 변환"
+        if (mz or translate) and items:
             if llm.available():
                 try:
-                    with self.step("자막 말투 변환 (MZ)"):
-                        captions.restyle(items, self.log)
+                    with self.step(f"{work} ({'한국어, MZ' if translate and mz else '한국어' if translate else 'MZ'})"):
+                        captions.restyle(items, self.log, translate=translate, mz=mz)
                 except llm.LLMError as error:
-                    self.log(f"자막 말투 변환 실패, 전사 내용 그대로 씁니다: {error}")
-                    warnings.append(f"자막 말투 변환 실패: {error}")
+                    self.log(f"{work} 실패, 전사 내용 그대로 씁니다: {error}")
+                    warnings.append(f"{work} 실패: {error}")
                     self.retry_next.add("captions")
             else:
-                warnings.append("언어 모델 API 키가 없어 자막 말투를 바꾸지 않았습니다.")
+                warnings.append("언어 모델 API 키가 없어 " + ("자막을 번역하지 않았습니다." if translate else "자막 말투를 바꾸지 않았습니다."))
         write_json(self.dir / "captions.json", {"items": items, "warnings": warnings, "edited": False})
 
     def _stage_plan(self, rerun: bool) -> None:

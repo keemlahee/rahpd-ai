@@ -25,9 +25,27 @@ PORT = 8766
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 LANGUAGE = "ko"
 FONTS = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
-FONT_BOLD = FONTS / "malgunbd.ttf"
-FONT_SANS_VF = FONTS / "NotoSansKR-VF.ttf"    # 예능 자막용. 굵기를 조절할 수 있는 글꼴이다
-FONT_SERIF_VF = FONTS / "NotoSerifKR-VF.ttf"  # 긴장감 있는 타이틀용
+# 윈도우가 아닌 PC에서 같은 글꼴이나 대체 글꼴을 찾을 폴더
+FONT_DIRS = [FONTS, ROOT / "assets" / "fonts", Path.home() / ".local" / "share" / "fonts", Path("/usr/share/fonts")]
+
+
+def find_font(*names: str) -> Path:
+    """윈도우 글꼴 폴더를 먼저 보고, 없으면 다른 글꼴 폴더에서 같은 이름이나 대체 글꼴을 찾는다."""
+    for folder in FONT_DIRS:
+        for name in names:
+            if (folder / name).exists():
+                return folder / name
+    for folder in FONT_DIRS[1:]:
+        for name in names:
+            found = next(folder.rglob(name), None) if folder.is_dir() else None
+            if found:
+                return found
+    return FONTS / names[0]
+
+
+FONT_BOLD = find_font("malgunbd.ttf", "NanumGothicBold.ttf")
+FONT_SANS_VF = find_font("NotoSansKR-VF.ttf")    # 예능 자막용. 굵기를 조절할 수 있는 글꼴이다
+FONT_SERIF_VF = find_font("NotoSerifKR-VF.ttf")  # 긴장감 있는 타이틀용
 
 CLAUDE_KEY = "ANTHROPIC_API_KEY"
 OPENAI_KEY = "OPENAI_API_KEY"
@@ -48,6 +66,7 @@ DEFAULT_OPTIONS: dict = {
     "burn_subtitles": True,
     "illust_position": "center",
     "transcribe_engine": "openai",
+    "speech_language": "ko",  # 영상에서 말하는 언어. 한국어가 아니면 원어로 받아쓰고 자막을 한국어로 번역한다
     "whisper_model": "",  # 비어 있으면 장치에 맞는 기본 모델
     "image_provider": "auto",
     "fx_style": "mixed",
@@ -72,6 +91,7 @@ CHOICES = {
     "illust_position": ("center", "right", "pip", "full"),
     "image_provider": ("auto", "openai", "claude"),
     "transcribe_engine": ("openai", "local"),
+    "speech_language": ("ko", "en", "auto"),
     "fx_style": ("off", "variety", "survival", "mixed"),
     "whisper_model": ("", "small", "medium", "large-v3-turbo", "large-v3"),
 }
@@ -138,7 +158,7 @@ def _cpu_name() -> str:
 
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as key:
             return winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
-    except OSError:
+    except (OSError, ImportError):  # 윈도우가 아니면 winreg가 없다
         return "CPU"
 
 
@@ -147,7 +167,7 @@ def _nvidia_name() -> str:
         output = subprocess.run(
             ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
             capture_output=True, text=True, timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""

@@ -28,6 +28,15 @@ CHUNK_WORKERS = 4
 # Whisper는 '음', '어'를 지워서 깔끔한 문장을 만드는 습성이 있다. 추임새가 그대로 적힌 문장을
 # 초기 프롬프트로 주면 그 문체를 따라가므로, 컷 편집에 필요한 추임새가 전사에 남는다.
 VERBATIM_PROMPT = "음, 어, 그러니까요, 어... 음... 말씀드린 대로 어 이렇게 음 진행하겠습니다."
+# 프롬프트의 언어를 따라 받아쓰므로, 한국어 프롬프트를 영어 말에 주면 Whisper가 한국어로 번역해 버린다.
+VERBATIM_PROMPTS = {"ko": VERBATIM_PROMPT, "en": "Um, uh, so, like... I mean, uh, we'll, um, get started."}
+
+
+def language_args(language: str) -> tuple[str | None, str | None]:
+    """(Whisper에 줄 언어, 초기 프롬프트). 자동 감지는 둘 다 주지 않는다."""
+    if language == "auto":
+        return None, None
+    return language, VERBATIM_PROMPTS.get(language)
 
 
 class TranscribeError(RuntimeError):
@@ -47,16 +56,18 @@ def _load_model(name: str, log: LogFn):
     return WhisperModel(name, device="cpu", compute_type="int8", download_root=str(MODELS))
 
 
-def transcribe(audio: Path, model_name: str, duration: float, log: LogFn, runner: Runner) -> dict:
+def transcribe(audio: Path, model_name: str, duration: float, log: LogFn, runner: Runner,
+               language: str = LANGUAGE) -> dict:
     model = _load_model(model_name, log)
     samples, _ = read_wav(audio)
+    whisper_language, prompt = language_args(language)
     segments, _ = model.transcribe(
         # 파일 경로를 주면 PyAV로 다시 디코딩하는데, 이미 추출한 16kHz WAV가 있으니 파형을 바로 넘긴다.
         samples[:, 0].astype(np.float32) / 32768.0,
-        language=LANGUAGE,
+        language=whisper_language,
         beam_size=5,
         word_timestamps=True,
-        initial_prompt=VERBATIM_PROMPT,
+        initial_prompt=prompt,
         condition_on_previous_text=False,
         vad_filter=True,
         vad_parameters={"threshold": 0.3, "min_silence_duration_ms": 400, "speech_pad_ms": 250},
@@ -122,12 +133,14 @@ def merge_response(words: list, segments: list, offset: float) -> list[dict]:
     return result
 
 
-def _request(client: openai.OpenAI, part: Path):
+def _request(client: openai.OpenAI, part: Path, language: str = LANGUAGE):
+    whisper_language, prompt = language_args(language)
+    extra = {key: value for key, value in (("language", whisper_language), ("prompt", prompt)) if value}
     try:
         with open(part, "rb") as file:
             return client.audio.transcriptions.create(
-                model=OPENAI_MODEL, file=file, language=LANGUAGE, prompt=VERBATIM_PROMPT,
-                response_format="verbose_json", timestamp_granularities=["word", "segment"])
+                model=OPENAI_MODEL, file=file, response_format="verbose_json",
+                timestamp_granularities=["word", "segment"], **extra)
     except openai.AuthenticationError as error:
         raise TranscribeError("OpenAI API 키가 올바르지 않습니다.") from error
     except openai.RateLimitError as error:
@@ -138,7 +151,7 @@ def _request(client: openai.OpenAI, part: Path):
         raise TranscribeError(f"OpenAI 전사 오류: {error}") from error
 
 
-def transcribe_openai(audio: Path, log: LogFn, runner: Runner) -> dict:
+def transcribe_openai(audio: Path, log: LogFn, runner: Runner, language: str = LANGUAGE) -> dict:
     client = openai.OpenAI(api_key=get_key(OPENAI_KEY))
     samples, rate = read_wav(audio)
     bounds = split_points(samples, rate)
@@ -150,7 +163,7 @@ def transcribe_openai(audio: Path, log: LogFn, runner: Runner) -> dict:
         part = folder / f"part{index}.mp3"
         media.run_ffmpeg(["-ss", str(start), "-to", str(end), "-i", str(audio), "-ac", "1", "-c:a", "libmp3lame",
                           "-b:a", "64k", str(part)], runner)
-        response = _request(client, part)
+        response = _request(client, part, language)
         log(f"전사 진행: 조각 {index + 1}/{len(bounds)} 완료")
         return merge_response(response.words or [], response.segments or [], start)
 

@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import json
-import msvcrt
 import os
+import re
 import subprocess
+import sys
 import threading
 import wave
-import _winapi
+from contextlib import suppress
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
@@ -20,7 +22,13 @@ import numpy as np
 
 from .config import find_tool
 
-NO_WINDOW = subprocess.CREATE_NO_WINDOW
+if sys.platform == "win32":
+    import msvcrt
+    import _winapi
+else:
+    import fcntl
+
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # 윈도우가 아니면 플래그가 없다
 PIPE_SIZE = 16 << 20
 IO_BUFFER = 1 << 20
 
@@ -91,6 +99,14 @@ def probe(path: Path) -> dict:
         "has_audio": audio is not None,
         "color_space": video.get("color_space") or "",
     }
+
+
+@lru_cache(maxsize=1)
+def _filter_file_option() -> str:
+    """필터를 파일로 넘기는 옵션. ffmpeg 7부터는 '-/filter:v'이고, 리눅스 배포판에 많은 6.x는 '-filter_script:v'만 안다."""
+    result = subprocess.run([find_tool("ffmpeg"), "-version"], capture_output=True, creationflags=NO_WINDOW)
+    match = re.match(rb"ffmpeg version n?(\d+)\.", result.stdout)
+    return "-filter_script:v" if match and int(match.group(1)) < 7 else "-/filter:v"
 
 
 def _ffmpeg_args(*args: str) -> list[str]:
@@ -191,7 +207,7 @@ def render_cut(source: Path, info: dict, keeps: list[list[int]], audio: Path | N
     args = ["-i", str(source)]
     if audio:
         args += ["-i", str(audio)]
-    args += ["-/filter:v", str(script), "-map", "0:v:0"]
+    args += [_filter_file_option(), str(script), "-map", "0:v:0"]
     if audio:
         args += ["-map", "1:a:0", "-c:a", "aac", "-b:a", "192k"]
     args += ["-fps_mode", "passthrough", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -203,8 +219,13 @@ def render_cut(source: Path, info: dict, keeps: list[list[int]], audio: Path | N
 def _big_pipe() -> tuple[int, int]:
     """(읽기, 쓰기) 파일 번호. 윈도우 기본 파이프는 작아서 프레임 하나를 보내는 데 왕복이 수백 번 든다.
 
-    1080p 프레임 전송이 초당 약 100장에서 330장으로 빨라진다.
+    1080p 프레임 전송이 초당 약 100장에서 330장으로 빨라진다. 리눅스는 가능한 만큼 파이프를 키운다.
     """
+    if sys.platform != "win32":
+        read_fd, write_fd = os.pipe()
+        with suppress(OSError, AttributeError):
+            fcntl.fcntl(write_fd, fcntl.F_SETPIPE_SZ, PIPE_SIZE)
+        return read_fd, write_fd
     read_handle, write_handle = _winapi.CreatePipe(None, PIPE_SIZE)
     return msvcrt.open_osfhandle(read_handle, os.O_RDONLY), msvcrt.open_osfhandle(write_handle, 0)
 
@@ -219,7 +240,7 @@ def _reader_process(args: list[str], stderr, runner: Runner) -> subprocess.Popen
 
 def open_decoder(source: Path, info: dict, keeps: list[list[int]], workdir: Path, runner: Runner) -> subprocess.Popen:
     script = _write_filter(workdir / "final_filter.txt", frame_filter(info, keeps, "format=bgr24"))
-    args = _ffmpeg_args("-i", str(source), "-/filter:v", str(script), "-map", "0:v:0", "-an",
+    args = _ffmpeg_args("-i", str(source), _filter_file_option(), str(script), "-map", "0:v:0", "-an",
                         "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "-")
     with open(workdir / "decoder_log.txt", "wb") as stderr:
         return _reader_process(args, stderr, runner)

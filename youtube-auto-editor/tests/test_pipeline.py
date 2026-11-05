@@ -85,3 +85,17 @@ def test_forced_rerun_replaces_edited_plan(project, monkeypatch):
     monkeypatch.setattr(pipeline.llm, "available", lambda: False)
     project._stage_plan(True)
     assert read_json(project.dir / "plan.json")["illustrations"] == []
+
+
+def test_korean_keeps_old_cache_and_other_languages_transcribe_again(project):
+    # 한국어는 옵션이 생기기 전과 같은 해시여야 기존 영상이 다시 전사되지 않는다.
+    assert "lang" not in project._params("transcribe")
+    assert "lang" not in project._params("captions")
+    before = project._hash("transcribe")
+    project.options = clean_options({"speech_language": "en"})
+    assert project._hash("transcribe") != before
+    assert project._params("captions")["lang"] == "en"
+
+
+def test_unknown_speech_language_falls_back_to_korean():
+    assert clean_options({"speech_language": "fr"})["speech_language"] == "ko"

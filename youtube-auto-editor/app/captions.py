@@ -8,6 +8,7 @@ from .media import LogFn
 from .privacy import find_in_text
 
 MAX_CHARS = 22
+FOREIGN_CHARS = 40   # 외국어 원문 조각 길이. 영어는 같은 뜻에 글자가 많아 22자로 자르면 번역이 토막 난다
 MAX_SECONDS = 5.0
 MAX_GAP = 1.0        # 말이 이만큼 끊기면 자막을 나눈다
 LEFTOVER_CHARS = 5   # 이보다 짧은 끝말은 앞줄에 붙인다
@@ -20,8 +21,8 @@ MUTED = "(삐-)"
 SENTENCE_END = ".?!…"
 
 
-def build_items(segments: list[dict]) -> list[dict]:
-    """컷 편집 후 남은 단어로 자막 조각을 만든다. 시각은 최종 영상 기준이다."""
+def build_items(segments: list[dict], chars: int = MAX_CHARS) -> list[dict]:
+    """컷 편집 후 남은 단어로 자막 조각을 만든다. 시각은 최종 영상 기준이다. chars는 한 조각의 최대 글자 수."""
     items: list[dict] = []
     current: list[dict] = []
 
@@ -35,27 +36,28 @@ def build_items(segments: list[dict]) -> list[dict]:
         for word in (w for w in segment["words"] if not w["removed"]):
             if current:
                 length = sum(len(w["word"]) + 1 for w in current) + len(word["word"])
-                if (length > MAX_CHARS or word["end"] - current[0]["start"] > MAX_SECONDS
+                if (length > chars or word["end"] - current[0]["start"] > MAX_SECONDS
                         or word["start"] - current[-1]["end"] > MAX_GAP):
                     flush()
             current.append(word)
             if word["word"][-1] in SENTENCE_END:
                 flush()
     flush()
-    items = _join_leftovers(items)
+    items = _join_leftovers(items, chars)
     for item, following in zip(items, items[1:] + [None]):
         limit = following["start"] if following else item["end"] + MIN_SECONDS
         item["end"] = round(min(max(item["end"], item["start"] + MIN_SECONDS), limit), 3)
     return items
 
 
-def _join_leftovers(items: list[dict]) -> list[dict]:
+def _join_leftovers(items: list[dict], chars: int = MAX_CHARS) -> list[dict]:
     """글자 수로 자르다 끝말만 혼자 남은 줄('줍니다')을 앞줄에 붙인다. 말투를 바꿀 때도 줄 단위라 어색해진다."""
+    leftover, limit = LEFTOVER_CHARS * chars // MAX_CHARS, MAX_JOINED * chars // MAX_CHARS
     joined: list[dict] = []
     for item in items:
         previous = joined[-1] if joined else None
-        if (previous and len(item["source"]) <= LEFTOVER_CHARS and previous["source"][-1] not in SENTENCE_END
-                and item["start"] - previous["end"] <= MAX_GAP and len(previous["source"]) + len(item["source"]) < MAX_JOINED):
+        if (previous and len(item["source"]) <= leftover and previous["source"][-1] not in SENTENCE_END
+                and item["start"] - previous["end"] <= MAX_GAP and len(previous["source"]) + len(item["source"]) < limit):
             previous["source"] += " " + item["source"]
             previous["end"] = item["end"]
         else:
@@ -65,12 +67,16 @@ def _join_leftovers(items: list[dict]) -> list[dict]:
     return joined
 
 
-def restyle(items: list[dict], log: LogFn) -> None:
-    """각 조각의 text를 MZ 말투로 채운다. 실패하면 llm.LLMError를 낸다."""
+def restyle(items: list[dict], log: LogFn, translate: bool = False, mz: bool = True) -> None:
+    """각 조각의 text를 MZ 말투로 채운다. translate이면 한국어로 옮기고, mz이면 그때도 MZ 말투로 쓴다.
+
+    실패하면 llm.LLMError를 낸다.
+    """
     lines = [{"id": item["id"], "text": item["source"]} for item in items]
     batches = [lines[start:start + BATCH] for start in range(0, len(lines), BATCH)]
+    convert = (lambda batch: llm.translate_lines(batch, mz)) if translate else llm.restyle_lines
     with ThreadPoolExecutor(max_workers=BATCH_WORKERS) as pool:
-        results = list(pool.map(llm.restyle_lines, batches))
+        results = list(pool.map(convert, batches))
     styled = {key: value for result in results for key, value in result.items()}
     changed = 0
     for item in items:
@@ -79,7 +85,7 @@ def restyle(items: list[dict], log: LogFn) -> None:
         if text and len(text) <= max(len(item["source"]) * 2, 30):
             item["text"] = text
             changed += text != item["source"]
-    log(f"자막 말투 변환: {len(items)}줄 중 {changed}줄 변경")
+    log(f"자막 {'번역' if translate else '말투 변환'}: {len(items)}줄 중 {changed}줄 변경")
 
 
 def mask_pii(text: str) -> str:
