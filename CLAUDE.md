@@ -14,7 +14,7 @@ Windows 전용입니다. `app/media.py`가 `msvcrt`와 `_winapi`로 큰 파이�
 
 ```bash
 install.bat                                    # Python, ffmpeg, VC++ 런타임, .venv 준비
-.venv\Scripts\python -m app                    # 서버 실행 (http://127.0.0.1:8766). start.bat은 브라우저도 연다
+.venv\Scripts\python -m app                    # 감시기와 서버 실행 (http://127.0.0.1:8766). start.bat은 브라우저도 연다
 .venv\Scripts\python -m pytest tests           # 전체 테스트
 .venv\Scripts\python -m pytest tests/test_cuts.py::test_time_map_follows_cuts   # 테스트 하나
 .venv\Scripts\python -m tests.make_sample      # samples/test_video.mp4와 정답지 생성 (Windows 한국어 음성 필요)
@@ -23,6 +23,8 @@ install.bat                                    # Python, ffmpeg, VC++ 런타임,
 ```
 
 가짜 서버를 쓰려면 앱을 띄울 때 `ANTHROPIC_BASE_URL=http://127.0.0.1:9199`와 `OPENAI_BASE_URL=http://127.0.0.1:9199/v1`를 지정합니다. 받은 요청은 `tests/received.json`에 남습니다.
+
+코드를 고쳐도 서버를 다시 켤 필요가 없습니다. `app/*.py`를 저장하면 감시기가 재시작합니다. `requirements.txt`를 바꿨을 때만 `install.bat`이 필요합니다.
 
 ## 구조
 
@@ -40,6 +42,12 @@ install.bat                                    # Python, ffmpeg, VC++ 런타임,
 `plan.json`과 `cut_plan.json`에 `edited: true`가 있으면 강제 재실행 전까지 그 내용을 유지합니다.
 
 실패 처리는 단계마다 다릅니다. 기획이 실패하면 `retry_next`로 완료 기록을 남기지 않아 다음 실행에서 다시 시도합니다. 컷 문맥 검토 실패는 `review_failed`만 남기고 넘어갑니다. 컷을 미완료로 두면 뒤의 OCR이 매번 다시 돌기 때문입니다.
+
+### 코드 자동 적용 (`app/__main__.py`)
+
+`python -m app`은 감시기이고, 실제 서버는 그 자식 프로세스(uvicorn)입니다. uvicorn의 reload를 쓰지 않는 이유는 파일이 바뀌는 즉시 프로세스를 끊어 렌더 중인 작업까지 죽이기 때문입니다. 감시기는 `/api/job`으로 작업이 없음을 확인한 뒤에만 재시작하고, 서버가 답이 없으면 바쁜 것으로 봅니다.
+
+화면은 `/api/version`을 폴링합니다. 값이 바뀌면 새로고침하되, `hasWorkInProgress`(수정 중인 기획, 업로드, 재생 중인 영상, 입력 중인 키)가 참이면 끝날 때까지 미룹니다.
 
 ### 두 개의 시간축
 
@@ -73,6 +81,7 @@ install.bat                                    # Python, ffmpeg, VC++ 런타임,
 
 - Claude 호출은 모두 `claude.ask_json`을 거칩니다: 스트리밍, JSON 스키마 출력, `fallbacks="default"`. 모델은 환경 변수 `CLAUDE_MODEL`로 바꿉니다.
 - 이미지 파일명에 프롬프트 해시가 들어가서, 같은 프롬프트는 다시 과금되지 않습니다 (`images._cache_name`).
+- 그림은 최대 `images.WORKERS`장을 동시에 만듭니다. 요청 한도(429)에 걸리면 `_wait_out_rate_limit`이 기다렸다 재시도하고, 잔액 부족은 바로 실패로 알립니다. 중지하면 아직 시작하지 않은 그림은 취소합니다.
 - 그림 안에는 글자를 넣지 않습니다. 라벨은 `render.build_card`가 맑은 고딕으로 직접 씁니다.
 - `assets/logos/`에 없는 로고는 그림으로 지어내지 않습니다.
 
@@ -86,8 +95,9 @@ install.bat                                    # Python, ffmpeg, VC++ 런타임,
 - faster-whisper에 파일 경로를 주면 PyAV 호환 문제로 실패합니다. 파형 배열을 넘깁니다.
 - RapidOCR 기본값 PP-OCRv6에는 한국어 모델이 없어 PP-OCRv5를 지정합니다. 기본 `Det.limit_side_len`(736)은 1080p의 작은 글자를 놓칩니다.
 - `anthropic` 2.x는 `httpx`가 아니라 `httpx2`를 씁니다.
-- `gpt-image-2`는 이 계정에서 투명 배경을 거절합니다. `images._openai_image`가 불투명으로 받고 `remove_flat_background`가 배경을 지웁니다.
+- `gpt-image-2`는 이 계정에서 투명 배경을 거절합니다. `images._openai_image`가 불투명으로 받고 `remove_flat_background`가 배경을 지우며, 거절한 모델은 `_opaque_only`에 기억해 같은 요청을 반복하지 않습니다.
+- `.env`에 실제 키가 있어서, 테스트에서 주소를 바꾸지 않으면 실제 과금 호출이 나갑니다. `tests/test_images.py`는 키와 주소를 모두 가짜로 바꿉니다.
 
 ## 검증 상태
 
-실제 OpenAI 호출은 확인했습니다. 실제 Claude 호출은 API 크레딧이 없어 `tests/mock_apis.py`로만 확인했습니다. 크레딧 오류가 요청 형식 오류를 가렸을 수 있으니, 충전 후에는 기획과 컷 검토를 먼저 확인하세요. 실제 사람 목소리와 실제 얼굴로도 아직 시험하지 않았습니다.
+실제 OpenAI 호출은 그림 2장으로 확인했습니다. 8장 동시 생성은 가짜 서버로만 시험했고, 이 계정의 요청 한도는 알 수 없습니다. 실제 Claude 호출은 API 크레딧이 없어 `tests/mock_apis.py`로만 확인했습니다. 크레딧 오류가 요청 형식 오류를 가렸을 수 있으니, 충전 후에는 기획과 컷 검토를 먼저 확인하세요. 실제 사람 목소리와 실제 얼굴로도 아직 시험하지 않았습니다.

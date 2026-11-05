@@ -2,9 +2,10 @@
 
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = "editor-options";
+const VERSION_CHECK_MS = 2500;
 const state = {
   options: {}, labels: {}, videos: [], selected: "", logCursor: 0, polling: false,
-  edit: null, addedMosaics: [], removedMosaics: new Set(),
+  edit: null, addedMosaics: [], removedMosaics: new Set(), editDirty: false, uploading: false,
 };
 
 const esc = (text) => String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -83,9 +84,11 @@ function upload(file) {
   const request = new XMLHttpRequest();
   request.open("POST", "/api/upload");
   bar.hidden = false;
+  state.uploading = true;
   request.upload.onprogress = (event) => { bar.firstElementChild.style.width = `${(event.loaded / event.total) * 100}%`; };
   request.onload = async () => {
     bar.hidden = true;
+    state.uploading = false;
     if (request.status !== 200) {
       notify(new Error(JSON.parse(request.responseText).detail || "업로드 실패"));
       return;
@@ -96,7 +99,7 @@ function upload(file) {
     await loadVideos();
     loadResult();
   };
-  request.onerror = () => { bar.hidden = true; notify(new Error("업로드 실패")); };
+  request.onerror = () => { bar.hidden = true; state.uploading = false; notify(new Error("업로드 실패")); };
   request.send(form);
 }
 
@@ -158,6 +161,7 @@ async function loadResult() {
   $("resultName").textContent = video ? video.name : "";
   state.addedMosaics = [];
   state.removedMosaics = new Set();
+  state.editDirty = false;
   if (!video) return;
   const vid = video.id;
   const stamp = Date.now();
@@ -292,11 +296,13 @@ function renderEdit() {
   $("addIllust").addEventListener("click", () => {
     const start = currentCutTime();
     plan.illustrations.push({ start, end: start + 5, concept: "", label: "", logo: "", image_prompt: "", enabled: true });
+    state.editDirty = true;
     renderEdit();
   });
   $("addOverlay").addEventListener("click", () => {
     const start = currentCutTime();
     plan.overlays.push({ start, end: start + 2, kind: "icon", name: "", logo: "", image_prompt: "", enabled: true });
+    state.editDirty = true;
     renderEdit();
   });
   $("addMosaic").addEventListener("click", openMosaicMarker);
@@ -329,6 +335,7 @@ async function saveEdit() {
     });
     if (cutChanged) await api(`/api/videos/${vid}/cuts`, { method: "PUT", json: { enabled: cutState } });
 
+    state.editDirty = false;
     await run("render");
   } catch (error) { notify(error); }
 }
@@ -443,6 +450,8 @@ async function init() {
   await loadResult();
   const job = await api("/api/job?since=0");
   if (job.running) startPolling();
+  watchVersion();
+  ["input", "change"].forEach((name) => $("tab-edit").addEventListener(name, () => { state.editDirty = true; }));
 
   const drop = $("drop");
   ["dragenter", "dragover"].forEach((name) => drop.addEventListener(name, (event) => { event.preventDefault(); drop.classList.add("over"); }));
@@ -475,6 +484,22 @@ async function init() {
 function showKeys(keys) {
   $("claudeState").textContent = keys.claude ? `설정됨 (${keys.claude})` : "미설정";
   $("openaiState").textContent = keys.openai ? `설정됨 (${keys.openai})` : "미설정";
+}
+
+/* 코드가 바뀌면 서버가 스스로 다시 켜지므로 화면도 따라서 새로 읽는다.
+   쓰던 내용이 날아가면 안 되니, 작업 중이면 끝날 때까지 미룬다. */
+const hasWorkInProgress = () => state.editDirty || state.uploading || state.addedMosaics.length > 0
+  || !$("player").paused || $("mosaicMarker")?.childElementCount > 0
+  || $("claudeKey").value !== "" || $("openaiKey").value !== "";
+
+async function watchVersion() {
+  let current = "";
+  setInterval(async () => {
+    const data = await api("/api/version").catch(() => null);
+    if (!data) return;  // 서버가 다시 켜지는 중
+    current ||= data.version;
+    if (data.version !== current && !hasWorkInProgress()) location.reload();
+  }, VERSION_CHECK_MS);
 }
 
 init().catch(notify);

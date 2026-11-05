@@ -9,11 +9,15 @@ import base64
 import hashlib
 import io
 import os
+import random
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
+import openai
 from PIL import Image
 
 from . import claude
@@ -28,7 +32,9 @@ STYLE = (
 )
 OPENAI_MODELS = [m for m in [os.environ.get("OPENAI_IMAGE_MODEL"), "gpt-image-2", "gpt-image-1.5", "gpt-image-1"] if m]
 ILLUST_SIZE, ICON_SIZE = "1536x1024", "1024x1024"
-WORKERS = 4
+WORKERS = 8           # 동시에 만드는 그림 수
+RATE_LIMIT_WAIT = 300 # 요청 한도에 걸렸을 때 한 장당 기다리는 최대 시간(초)
+_opaque_only: set[str] = set()  # 투명 배경을 거절한 모델. 같은 실패 요청을 그림마다 보내지 않는다.
 
 
 def resolve_provider(choice: str) -> str:
@@ -67,22 +73,48 @@ def trim(image: Image.Image, margin: int = 16) -> Image.Image:
                        min(image.width, right + margin), min(image.height, bottom + margin)))
 
 
-def _openai_image(prompt: str, size: str, quality: str) -> bytes:
-    import openai
+def _wait_seconds(error: openai.RateLimitError, attempt: int) -> float:
+    try:
+        delay = float(error.response.headers.get("retry-after", ""))
+    except ValueError:
+        delay = min(2.0 ** attempt, 30.0)
+    return delay + random.uniform(0, 1)  # 함께 기다린 요청들이 다시 한꺼번에 몰리지 않게 한다
 
+
+def _wait_out_rate_limit(request: Callable):
+    """요청 한도(429)에 걸리면 기다렸다 다시 보낸다.
+
+    계정 등급이 낮으면 동시 생성 수를 늘렸을 때 한도에 걸린다. 이때 실패로 처리하면 영상에서
+    그림이 빠지므로, 처리량은 한도에 맞춰 줄어들더라도 그림은 끝까지 만든다.
+    """
+    deadline = time.monotonic() + RATE_LIMIT_WAIT
+    attempt = 0
+    while True:
+        try:
+            return request()
+        except openai.RateLimitError as error:
+            # 잔액 부족도 429로 온다. 기다려도 소용없으니 바로 알린다.
+            if error.code == "insufficient_quota":
+                raise RuntimeError("OpenAI 크레딧이 부족합니다. platform.openai.com의 Billing을 확인해 주세요.") from error
+            delay = _wait_seconds(error, attempt)
+            if time.monotonic() + delay > deadline:
+                raise RuntimeError(f"OpenAI 요청 한도로 {RATE_LIMIT_WAIT}초를 기다렸지만 풀리지 않았습니다.") from error
+            time.sleep(delay)
+            attempt += 1
+
+
+def _openai_image(prompt: str, size: str, quality: str) -> bytes:
     client = openai.OpenAI(api_key=get_key(OPENAI_KEY))
     last_error: Exception | None = None
     for model in OPENAI_MODELS:
-        for background in ("transparent", "opaque"):
+        for background in ("opaque",) if model in _opaque_only else ("transparent", "opaque"):
             try:
-                result = client.images.generate(model=model, prompt=prompt, size=size, quality=quality, n=1,
-                                                background=background, output_format="png")
+                result = _wait_out_rate_limit(lambda: client.images.generate(
+                    model=model, prompt=prompt, size=size, quality=quality, n=1,
+                    background=background, output_format="png"))
                 return base64.b64decode(result.data[0].b64_json)
             except openai.AuthenticationError as error:
                 raise RuntimeError("OpenAI API 키가 올바르지 않습니다.") from error
-            except openai.RateLimitError as error:
-                # 잔액 부족도 429로 온다. 모델을 바꿔도 소용없으니 바로 알린다.
-                raise RuntimeError(f"OpenAI 사용 한도 또는 잔액 문제입니다: {error.message}") from error
             except (openai.NotFoundError, openai.PermissionDeniedError) as error:
                 last_error = error
                 break  # 이 키로 못 쓰는 모델(조직 인증 필요 등) → 다음 모델
@@ -92,6 +124,7 @@ def _openai_image(prompt: str, size: str, quality: str) -> bytes:
                 if "safety" in text or "moderation" in text:
                     raise RuntimeError("OpenAI 안전 필터가 이 프롬프트를 거절했습니다. 프롬프트를 고쳐 주세요.") from error
                 if "background" in text or "transparent" in text:
+                    _opaque_only.add(model)
                     continue  # 투명 배경 미지원 → 불투명으로 받아 배경을 직접 지운다
                 break
             except openai.APIError as error:
@@ -165,17 +198,23 @@ def generate_all(plan: dict, image_dir: Path, provider_choice: str, log: LogFn, 
         warnings.append("그림을 만들 API 키가 없어 이미지 생성을 건너뜁니다. 설정에 키를 넣어 주세요.")
 
     if jobs:
-        log(f"이미지 {len(jobs)}장 생성 중 ({'OpenAI' if provider == 'openai' else 'Claude SVG'})")
-        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            futures = {pool.submit(_generate, view, provider, target): (view, target) for view, target in jobs}
-            for future in as_completed(futures):
+        workers = min(WORKERS, len(jobs))
+        log(f"이미지 {len(jobs)}장 생성 중, 동시에 {workers}장 ({'OpenAI' if provider == 'openai' else 'Claude SVG'})")
+        pool = ThreadPoolExecutor(max_workers=workers)
+        try:
+            futures = {pool.submit(_generate, view, provider, target): target for view, target in jobs}
+            for finished, future in enumerate(as_completed(futures), 1):
                 runner.check()
-                view, target = futures[future]
+                target = futures[future]
                 try:
                     future.result()
+                    log(f"이미지 {finished}/{len(jobs)} 완료")
                 except Exception as error:  # 그림 한 장이 실패해도 나머지 편집은 끝까지 진행한다.
                     warnings.append(f"그림 생성 실패 ({target.name}): {error}")
                     log(f"이미지 실패: {target.name}: {error}")
+        finally:
+            # 중지를 눌렀을 때 아직 시작하지 않은 그림까지 만들어 과금되면 안 된다.
+            pool.shutdown(wait=False, cancel_futures=True)
 
     for view, item, _title, _index in entries:
         if item.get("image") and not (image_dir / item["image"]).exists():

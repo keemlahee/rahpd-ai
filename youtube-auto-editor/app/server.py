@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
@@ -15,6 +16,7 @@ from .config import (CLAUDE_KEY, DEFAULT_OPTIONS, DEVICE, LOGOS, OPENAI_KEY, POR
 from .jobs import job
 
 app = FastAPI(title="유튜브 자동 편집")
+BOOT_ID = uuid.uuid4().hex
 LOCAL_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
 LOCAL_ORIGINS = {f"http://{host}" for host in LOCAL_HOSTS}
 
@@ -45,6 +47,13 @@ def _result_json(vid: str, name: str) -> dict:
 def _safe_name(name: str) -> str:
     name = Path(name).name
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip() or "video.mp4"
+
+
+@app.get("/api/version")
+def version():
+    """화면이 코드 변경을 알아채는 값. 서버가 다시 켜지거나 웹 파일이 바뀌면 달라진다."""
+    newest = max(path.stat().st_mtime_ns for path in WEB.iterdir() if path.is_file())
+    return {"version": f"{BOOT_ID}-{newest}"}
 
 
 @app.get("/api/status")
