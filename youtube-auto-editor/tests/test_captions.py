@@ -110,3 +110,24 @@ def test_caption_over_muted_speech_is_hidden():
     assert captions.for_display(items, speech)[0]["text"] == captions.MUTED
     speech[0]["enabled"] = False
     assert captions.for_display(items, speech)[0]["text"] == "공일공 일이삼사"
+
+
+def test_foreign_speech_is_cut_into_longer_pieces_for_translation():
+    speech = [segment("What is the most impressive part when you met Korean guys like a specific thing")]
+    assert len(captions.build_items(speech, captions.FOREIGN_CHARS)) < len(captions.build_items(speech))
+
+
+def test_translation_replaces_text_and_skips_korean_restyle(monkeypatch):
+    calls = []
+
+    def translate(lines, mz):
+        calls.append(mz)
+        return {line["id"]: "한국 남자 스타일 좋아함" for line in lines}
+
+    monkeypatch.setattr(llm, "translate_lines", translate)
+    monkeypatch.setattr(llm, "restyle_lines", lambda lines: pytest.fail("번역할 때는 한국어 말투 변환을 부르지 않는다"))
+    items = items_for("I like Korean men's style")
+    captions.restyle(items, lambda _m: None, translate=True, mz=False)
+    assert items[0]["text"] == "한국 남자 스타일 좋아함"
+    assert items[0]["source"] == "I like Korean men's style"
+    assert calls == [False]

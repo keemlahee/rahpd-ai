@@ -105,3 +105,24 @@ def test_no_keys_means_not_available(keys):
     assert not llm.available()
     with pytest.raises(llm.LLMError):
         llm.ask_json("s", "u", {})
+
+
+@pytest.mark.parametrize("language, expected", [("ko", "ko"), ("en", "en"), ("auto", None)])
+def test_whisper_gets_the_language_and_a_prompt_in_that_language(tmp_path, language, expected):
+    # 한국어 프롬프트를 영어 말에 주면 Whisper가 한국어로 번역해 버린다.
+    sent = {}
+    client = NS(audio=NS(transcriptions=NS(create=lambda **kw: sent.update(kw))))
+    part = tmp_path / "part.mp3"
+    part.write_bytes(b"x")
+    transcribe._request(client, part, language)
+    assert sent.get("language") == expected
+    assert sent.get("prompt") == transcribe.VERBATIM_PROMPTS.get(language)
+
+
+def test_translation_prompt_has_mz_rules_only_when_asked(monkeypatch):
+    systems = []
+    monkeypatch.setattr(llm, "ask_json", lambda system, user, schema, **kw: systems.append(system) or {"lines": []})
+    llm.translate_lines([{"id": 1, "text": "Hi"}], mz=True)
+    llm.translate_lines([{"id": 1, "text": "Hi"}], mz=False)
+    assert llm.MZ_RULES in systems[0]
+    assert llm.MZ_RULES not in systems[1]

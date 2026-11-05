@@ -66,6 +66,7 @@ DEFAULT_OPTIONS: dict = {
     "burn_subtitles": True,
     "illust_position": "center",
     "transcribe_engine": "openai",
+    "speech_language": "ko",  # 영상에서 말하는 언어. 한국어가 아니면 원어로 받아쓰고 자막을 한국어로 번역한다
     "whisper_model": "",  # 비어 있으면 장치에 맞는 기본 모델
     "image_provider": "auto",
     "fx_style": "mixed",
@@ -90,6 +91,7 @@ CHOICES = {
     "illust_position": ("center", "right", "pip", "full"),
     "image_provider": ("auto", "openai", "claude"),
     "transcribe_engine": ("openai", "local"),
+    "speech_language": ("ko", "en", "auto"),
     "fx_style": ("off", "variety", "survival", "mixed"),
     "whisper_model": ("", "small", "medium", "large-v3-turbo", "large-v3"),
 }
