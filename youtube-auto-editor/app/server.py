@@ -148,7 +148,8 @@ def edit_data(vid: str):
     _video(vid)
     folder = WORKSPACE / vid
     return {
-        "plan": read_json(folder / "plan.json", {"illustrations": [], "overlays": []}),
+        "plan": read_json(folder / "plan.json", {"illustrations": [], "overlays": [], "effects": []}),
+        "captions": read_json(folder / "captions.json", {"items": []}),
         "cuts": read_json(folder / "cut_plan.json", {"cuts": []}),
         "pii": read_json(folder / "pii.json", {"tracks": [], "speech": []}),
         "transcript": read_json(folder / "cut_transcript.json", {"segments": []}),
@@ -169,11 +170,27 @@ def save_plan(vid: str, body: dict):
     plan = _result_json(vid, "plan.json")
     plan["illustrations"] = body["illustrations"]
     plan["overlays"] = body["overlays"]
+    plan["effects"] = body.get("effects", [])
     plan["edited"] = True  # 다음 실행에서 기획 단계가 이 내용을 덮어쓰지 않게 한다
     plan["warnings"] = []
     write_json(WORKSPACE / vid / "plan.json", plan)
     # 프롬프트가 바뀐 항목만 새로 그린다(이미지 캐시는 프롬프트 해시로 찾는다).
     pipeline.bump(vid, "plan")
+    return {"ok": True}
+
+
+@app.put("/api/videos/{vid}/captions")
+def save_captions(vid: str, body: dict):
+    _video(vid)
+    _require_idle()
+    data = _result_json(vid, "captions.json")
+    texts = {int(key): str(value) for key, value in body["texts"].items()}
+    for item in data["items"]:
+        if item["id"] in texts:
+            item["text"] = texts[item["id"]]
+    data["edited"] = True
+    write_json(WORKSPACE / vid / "captions.json", data)
+    pipeline.bump(vid, "captions")
     return {"ok": True}
 
 

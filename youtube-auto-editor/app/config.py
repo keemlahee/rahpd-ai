@@ -24,7 +24,10 @@ PORT = 8766
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 LANGUAGE = "ko"
-FONT_BOLD = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "malgunbd.ttf"
+FONTS = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+FONT_BOLD = FONTS / "malgunbd.ttf"
+FONT_SANS_VF = FONTS / "NotoSansKR-VF.ttf"    # 예능 자막용. 굵기를 조절할 수 있는 글꼴이다
+FONT_SERIF_VF = FONTS / "NotoSerifKR-VF.ttf"  # 긴장감 있는 타이틀용
 
 CLAUDE_KEY = "ANTHROPIC_API_KEY"
 OPENAI_KEY = "OPENAI_API_KEY"
@@ -41,9 +44,14 @@ DEFAULT_OPTIONS: dict = {
     "face_mosaic": False,
     "audio_mute": False,
     "pii_claude": False,
+    "mz_subtitles": True,
+    "burn_subtitles": True,
     "illust_position": "center",
+    "transcribe_engine": "openai",
     "whisper_model": "",  # 비어 있으면 장치에 맞는 기본 모델
     "image_provider": "auto",
+    "fx_style": "mixed",
+    "fx_per_min": 4.0,
     "silence_min": 0.6,
     "silence_keep": 0.3,
     "illust_per_min": 1.5,
@@ -56,12 +64,15 @@ RANGES = {
     "silence_keep": (0.0, 2.0),
     "illust_per_min": (0.0, 6.0),
     "overlay_per_min": (0.0, 12.0),
+    "fx_per_min": (0.0, 15.0),
     "ocr_interval": (0.1, 5.0),
     "crf": (14, 30),
 }
 CHOICES = {
     "illust_position": ("center", "right", "pip", "full"),
     "image_provider": ("auto", "openai", "claude"),
+    "transcribe_engine": ("openai", "local"),
+    "fx_style": ("off", "variety", "survival", "mixed"),
     "whisper_model": ("", "small", "medium", "large-v3-turbo", "large-v3"),
 }
 

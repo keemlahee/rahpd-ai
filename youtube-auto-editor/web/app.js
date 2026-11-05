@@ -67,7 +67,7 @@ function renderVideos() {
 }
 
 function renderStageButtons() {
-  const notes = { transcribe: "Whisper", cut: "무음·추임새", plan: "Claude", images: "일러스트·아이콘", pii: "OCR", render: "모자이크+합성" };
+  const notes = { transcribe: "Whisper", cut: "무음·추임새", captions: "MZ 말투", plan: "일러스트·효과", images: "일러스트·아이콘", pii: "OCR", render: "모자이크+합성" };
   $("stageButtons").innerHTML = Object.entries(state.labels).map(([key, label]) =>
     `<button class="btn stage" data-stage="${key}">${label}<small>${notes[key]}</small></button>`).join("");
   document.querySelectorAll(".stage").forEach((el) => el.addEventListener("click", () => run(el.dataset.stage)));
@@ -195,6 +195,7 @@ function renderReport(result) {
     <div class="stats">
       ${stat(`${s.source_duration}s → ${s.final_duration}s`, `${s.saved}초 단축`)}${cuts}
       ${stat(`${s.illustrations}개`, "설명 일러스트")}${stat(`${s.overlays}개`, "로고·아이콘")}
+      ${stat(`${s.effects ?? 0}개`, "예능 효과")}${stat(`${s.subtitles ?? 0}줄`, "화면 자막")}
       ${stat(`${s.mosaics}곳`, "화면 모자이크")}${stat(`${s.muted}곳`, "음성 음소거")}
     </div>
     <div class="md">${esc(result.report_md)}</div>`;
@@ -215,8 +216,40 @@ function renderEdit() {
   const cuts = edit.cuts.cuts.filter((c) => c.type !== "silence");
   const silences = edit.cuts.cuts.length - cuts.length;
   const names = { silence: "무음", filler: "추임새", stutter: "말더듬", sound: "짧은 소리" };
+  plan.effects ||= [];
+  const fxNames = { punch_zoom: "화면 확대", shake: "화면 흔들림", focus_lines: "집중선", freeze: "정지 화면", impact_text: "큰 예능 자막",
+    mono_tension: "흑백 긴장감", slow_zoom: "천천히 확대", title_card: "타이틀 카드" };
+  const sfxNames = { none: "없음", pop: "톡", boom: "두둥", whoosh: "휙", ding: "띵", tension: "긴장음" };
+  const choose = (value, field, index, options) => `<select data-group="effects" data-index="${index}" data-field="${field}">
+    ${Object.entries(options).map(([key, label]) => `<option value="${key}" ${key === value ? "selected" : ""}>${label}</option>`).join("")}</select>`;
 
   box.innerHTML = `
+    <div class="edit-section">
+      <h3>자막 (${edit.captions.items.length}) <small>고친 내용은 영상과 SRT에 함께 반영됩니다</small></h3>
+      <div class="scroll"><table class="edit-table">
+        <tr><th>시각</th><th>자막</th><th>원래 말</th></tr>
+        ${edit.captions.items.map((item) => `<tr>
+          <td><button class="btn tiny" data-seek="${item.start}">${clock(item.start)}</button></td>
+          <td><input class="label" data-caption="${item.id}" value="${esc(item.text)}"></td>
+          <td>${esc(item.source)}</td>
+        </tr>`).join("") || '<tr><td colspan="3">없음</td></tr>'}
+      </table></div>
+    </div>
+    <div class="edit-section">
+      <h3>예능 효과 (${plan.effects.length}) <button class="btn tiny" id="addEffect">+ 추가</button></h3>
+      <div class="scroll"><table class="edit-table">
+        <tr><th></th><th>시작</th><th>끝</th><th>효과</th><th>글자</th><th>효과음</th></tr>
+        ${plan.effects.map((item, i) => `<tr class="${item.enabled === false ? "off" : ""}">
+          <td class="check">${checkbox(item.enabled !== false, "effects", i)}</td>
+          <td>${timeInput(item.start, "start", i, "effects")}</td>
+          <td>${timeInput(item.end, "end", i, "effects")}</td>
+          <td>${choose(item.type, "type", i, fxNames)}</td>
+          <td>${textInput(item.text, "text", i, "effects", "label")}</td>
+          <td>${choose(item.sfx, "sfx", i, sfxNames)}</td>
+        </tr>`).join("") || '<tr><td colspan="6">없음</td></tr>'}
+      </table></div>
+    </div>`
+    + `
     <div class="edit-section">
       <h3>설명 일러스트 (${plan.illustrations.length}) <button class="btn tiny" id="addIllust">+ 추가</button></h3>
       <div class="scroll"><table class="edit-table">
@@ -305,6 +338,12 @@ function renderEdit() {
     state.editDirty = true;
     renderEdit();
   });
+  $("addEffect").addEventListener("click", () => {
+    const start = currentCutTime();
+    plan.effects.push({ start, end: start + 1.5, type: "punch_zoom", text: "", sfx: "pop", enabled: true });
+    state.editDirty = true;
+    renderEdit();
+  });
   $("addMosaic").addEventListener("click", openMosaicMarker);
   $("saveEdit").addEventListener("click", saveEdit);
 }
@@ -317,8 +356,15 @@ async function saveEdit() {
   const edit = state.edit;
   try {
     const plan = edit.plan;
-    const planPayload = { illustrations: plan.illustrations, overlays: plan.overlays };
+    const planPayload = { illustrations: plan.illustrations, overlays: plan.overlays, effects: plan.effects };
     await api(`/api/videos/${vid}/plan`, { method: "PUT", json: planPayload });
+
+    const texts = {};
+    box.querySelectorAll("[data-caption]").forEach((el) => {
+      const item = edit.captions.items.find((c) => c.id === Number(el.dataset.caption));
+      if (item.text !== el.value) texts[el.dataset.caption] = el.value;
+    });
+    if (Object.keys(texts).length) await api(`/api/videos/${vid}/captions`, { method: "PUT", json: { texts } });
 
     const enabled = {};
     box.querySelectorAll("[data-track]").forEach((el) => { enabled[el.dataset.track] = el.checked; });

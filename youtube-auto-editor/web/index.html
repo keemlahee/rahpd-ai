@@ -10,7 +10,7 @@
   <header class="top">
     <div>
       <h1>🎬 유튜브 자동 편집</h1>
-      <p>전사 → 무음/추임새 컷 → 일러스트·오버레이 기획 → 개인정보 모자이크 → 렌더</p>
+      <p>전사 → 무음/추임새 컷 → MZ 자막 → 일러스트·예능 효과 기획 → 개인정보 모자이크 → 렌더</p>
     </div>
     <div class="device" id="device">장치 확인 중</div>
   </header>
@@ -35,11 +35,11 @@
       <section class="card">
         <h2><b>⚙</b> 설정 (API 키)</h2>
         <label class="key">
-          <span>Claude (기획) <em id="claudeState"></em></span>
+          <span>Claude (선택) <em id="claudeState"></em></span>
           <input id="claudeKey" type="password" placeholder="ANTHROPIC_API_KEY (sk-ant-...)" autocomplete="off">
         </label>
         <label class="key">
-          <span>OpenAI (그림 생성) <em id="openaiState"></em></span>
+          <span>OpenAI (전사·자막·그림) <em id="openaiState"></em></span>
           <input id="openaiKey" type="password" placeholder="OPENAI_API_KEY (sk-...)" autocomplete="off">
         </label>
         <button class="btn primary small" id="saveKeys">저장</button>
@@ -57,6 +57,8 @@
           <label><input type="checkbox" data-opt="mosaic"> 개인정보 모자이크</label>
           <label><input type="checkbox" data-opt="face_mosaic"> 얼굴 모자이크</label>
           <label><input type="checkbox" data-opt="audio_mute"> 음성 개인정보 음소거</label>
+          <label><input type="checkbox" data-opt="burn_subtitles"> 자막 입히기</label>
+          <label><input type="checkbox" data-opt="mz_subtitles"> MZ 말투 자막</label>
         </div>
         <div class="selects">
           <label>일러스트 위치
@@ -67,7 +69,21 @@
               <option value="full">전체 화면</option>
             </select>
           </label>
-          <label>Whisper
+          <label>예능 효과
+            <select data-opt="fx_style">
+              <option value="mixed">섞어서</option>
+              <option value="variety">무한도전풍</option>
+              <option value="survival">흑백요리사풍</option>
+              <option value="off">끄기</option>
+            </select>
+          </label>
+          <label>전사
+            <select data-opt="transcribe_engine">
+              <option value="openai">OpenAI API</option>
+              <option value="local">이 PC</option>
+            </select>
+          </label>
+          <label>이 PC 전사 모델
             <select data-opt="whisper_model" id="whisperSelect">
               <option value="">자동</option>
               <option value="small">small (빠름)</option>
@@ -91,11 +107,12 @@
             <label>남길 무음(초) <input type="number" step="0.1" min="0" max="2" data-opt="silence_keep"></label>
             <label>일러스트/분 <input type="number" step="0.5" min="0" max="6" data-opt="illust_per_min"></label>
             <label>오버레이/분 <input type="number" step="0.5" min="0" max="12" data-opt="overlay_per_min"></label>
+            <label>예능 효과/분 <input type="number" step="0.5" min="0" max="15" data-opt="fx_per_min"></label>
             <label>OCR 간격(초) <input type="number" step="0.1" min="0.1" max="5" data-opt="ocr_interval"></label>
             <label>화질(낮을수록 좋음) <input type="number" step="1" min="14" max="30" data-opt="crf"></label>
           </div>
           <label class="sub-check"><input type="checkbox" data-opt="pii_claude">
-            이름·주소를 Claude로 추가 판별 <small>(화면 글자가 Claude API로 전송됩니다)</small></label>
+            이름·주소를 AI로 추가 판별 <small>(화면 글자가 Claude 또는 OpenAI API로 전송됩니다)</small></label>
         </details>
       </section>
 

@@ -62,10 +62,10 @@ def test_repeated_plan_failure_reruns_nothing_else(project, monkeypatch):
 
 def test_cut_review_failure_does_not_leave_cut_unfinished(project, monkeypatch):
     def refuse(*_args):
-        raise pipeline.claude.ClaudeError("크레딧 부족")
+        raise pipeline.llm.LLMError("크레딧 부족")
 
-    monkeypatch.setattr(pipeline.claude, "available", lambda: True)
-    monkeypatch.setattr(pipeline.claude, "review_cuts", refuse)
+    monkeypatch.setattr(pipeline.llm, "available", lambda: True)
+    monkeypatch.setattr(pipeline.llm, "review_cuts", refuse)
     plan = {"cuts": [{"id": 1}]}
     project._review_cuts(plan, [{"word": "음"}], None)
     assert plan["review_failed"] is True
@@ -75,13 +75,13 @@ def test_cut_review_failure_does_not_leave_cut_unfinished(project, monkeypatch):
 def test_edited_plan_is_kept_without_calling_claude(project, monkeypatch):
     plan = {"illustrations": [{"label": "직접 쓴 일러스트"}], "overlays": [], "warnings": [], "edited": True}
     write_json(project.dir / "plan.json", plan)
-    monkeypatch.setattr(pipeline.claude, "plan_visuals", lambda *_a: pytest.fail("Claude를 부르면 안 된다"))
+    monkeypatch.setattr(pipeline.llm, "plan_visuals", lambda *_a: pytest.fail("언어 모델을 부르면 안 된다"))
     project._stage_plan(False)
     assert read_json(project.dir / "plan.json") == plan
 
 
 def test_forced_rerun_replaces_edited_plan(project, monkeypatch):
     write_json(project.dir / "plan.json", {"illustrations": [{"label": "직접"}], "overlays": [], "edited": True})
-    monkeypatch.setattr(pipeline.claude, "available", lambda: False)
+    monkeypatch.setattr(pipeline.llm, "available", lambda: False)
     project._stage_plan(True)
     assert read_json(project.dir / "plan.json")["illustrations"] == []

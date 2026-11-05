@@ -1,26 +1,38 @@
 """최종 합성: 원본 프레임에 모자이크와 일러스트 카드, 로고·아이콘을 입혀 한 번만 인코딩한다."""
 from __future__ import annotations
 
+import math
 import time as clock
 from contextlib import suppress
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from . import media
-from .config import FONT_BOLD
+from . import layout, media
+from .config import FONT_BOLD, FONT_SANS_VF, FONT_SERIF_VF
+from .fx import FrameEffects
 from .images import find_logo
 from .media import LogFn, Runner
 from .privacy import rect_at
 
 CREAM = (255, 249, 236, 255)
 INK = (28, 32, 48, 255)
+BLACK = (0, 0, 0, 255)
+WHITE = (255, 255, 255, 255)
+IMPACT_COLORS = [(255, 221, 51, 255), (255, 107, 129, 255), (92, 225, 230, 255), (164, 255, 92, 255)]
 POP_IN = 0.25
 FADE_OUT = 0.15
 DIM = 0.55  # 중앙 카드가 뜰 때 뒤 화면 밝기
+TITLE_DIM = 0.25
+CAPTION_SIZE = 0.052      # 화면 높이 대비 글자 크기
+CAPTION_BOTTOM = 0.94     # 자막 아랫변 위치
+IMPACT_SIZE = 0.11
+TITLE_SIZE = 0.12
+TEXT_WIDTH = 0.86
 
 
 @dataclass
@@ -31,6 +43,8 @@ class Layer:
     x: int
     y: int
     dim: bool = False
+    animate: bool = True
+    dim_to: float = DIM
 
     def __post_init__(self) -> None:
         # 매 프레임 합성하므로 색과 투명도를 미리 나눠 둔다.
@@ -96,23 +110,121 @@ def build_chip(art: Image.Image, size: int, unit: int) -> Image.Image:
 
 
 def _place_illustration(art: Image.Image, label: str, logo: Image.Image | None, position: str, width: int, height: int,
-                        unit: int):
+                        unit: int, avoid: list):
+    """중앙 카드와 전체 화면은 일부러 화면을 덮는다. 옆에 붙는 카드만 사람을 피해 자리를 잡는다."""
     if position == "full":
         card = build_card(art, label, width - unit * 4, height - unit * 4, unit, logo)
         return card, (width - card.width) // 2, (height - card.height) // 2, True
-    if position == "right":
-        card = build_card(art, label, int(width * 0.42), int(height * 0.8), unit, logo)
-        return card, width - card.width - unit * 3, (height - card.height) // 2, False
-    if position == "pip":
-        card = build_card(art, label, int(width * 0.3), int(height * 0.42), unit, logo)
-        return card, width - card.width - unit * 3, height - card.height - unit * 3, False
+    if position in ("right", "pip"):
+        limit_w, limit_h = (0.42, 0.8) if position == "right" else (0.3, 0.42)
+        spots = ((1, 0.5), (0, 0.5)) if position == "right" else ((1, 0.75), (0, 0.75), (1, 0), (0, 0))
+        card = build_card(art, label, int(width * limit_w), int(height * limit_h), unit, logo)
+        x, y, scale = layout.place(card.width, card.height, width, height, avoid, unit * 3, spots, (1.0, 0.85, 0.7))
+        if scale < 1:
+            card = build_card(art, label, int(width * limit_w * scale), int(height * limit_h * scale), unit, logo)
+        return card, x, y, False
     card = build_card(art, label, int(width * 0.7), int(height * 0.84), unit, logo)
     return card, (width - card.width) // 2, (height - card.height) // 2, True
 
 
-def build_layers(plan: dict, image_dir: Path, position: str, width: int, height: int, log: LogFn) -> list[Layer]:
+@lru_cache(maxsize=32)
+def _display_font(path: Path, size: int, weight: int = 900) -> ImageFont.FreeTypeFont:
+    """굵기를 고를 수 있는 글꼴을 쓴다. 글꼴이 없는 PC에서는 맑은 고딕 굵게로 대신한다."""
+    try:
+        font = ImageFont.truetype(str(path), size)
+        font.set_variation_by_axes([weight])
+        return font
+    except (OSError, NotImplementedError):
+        return _font(size)
+
+
+def _wrap(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+    """한 줄에 안 들어가면 어절 기준으로 가장 고르게 두 줄로 나눈다."""
+    if font.getlength(text) <= max_width:
+        return [text]
+    tokens = text.split()
+    splits = [(" ".join(tokens[:i]), " ".join(tokens[i:])) for i in range(1, len(tokens))]
+    if not splits:
+        middle = len(text) // 2
+        splits = [(text[:middle], text[middle:])]
+    return list(min(splits, key=lambda pair: abs(font.getlength(pair[0]) - font.getlength(pair[1]))))
+
+
+def text_image(text: str, path: Path, size: int, max_width: int, fill: tuple, stroke: tuple, stroke_ratio: float,
+               weight: int = 900) -> Image.Image:
+    """외곽선이 있는 글자 그림. 폭을 넘으면 글자를 줄인다."""
+    while True:
+        font = _display_font(path, size, weight)
+        lines = _wrap(text, font, max_width)
+        if size <= 16 or all(font.getlength(line) <= max_width for line in lines):
+            break
+        size = int(size * 0.92)
+    body = "\n".join(lines)
+    width = max(1, int(size * stroke_ratio))
+    spacing = size // 6
+    measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    left, top, right, bottom = measure.multiline_textbbox((0, 0), body, font=font, stroke_width=width, spacing=spacing, align="center")
+    image = Image.new("RGBA", (math.ceil(right - left) + 4, math.ceil(bottom - top) + 4), (0, 0, 0, 0))
+    ImageDraw.Draw(image).multiline_text((2 - left, 2 - top), body, font=font, fill=fill, stroke_width=width, stroke_fill=stroke,
+                                         spacing=spacing, align="center")
+    return image
+
+
+def _effect_layers(items: list[dict], people: list[dict] | None, width: int, height: int, unit: int) -> list[Layer]:
+    """화면에 크게 뜨는 글자 효과."""
+    layers: list[Layer] = []
+    color = 0
+    for item in items:
+        text = item.get("text", "").strip()
+        if not text or not item.get("enabled", True):
+            continue
+        if item["type"] == "title_card":
+            image = text_image(text, FONT_SERIF_VF, int(height * TITLE_SIZE), int(width * 0.8), WHITE, BLACK, 0.02)
+            layers.append(Layer(item["start"], item["end"], _to_bgra(image), (width - image.width) // 2,
+                                (height - image.height) // 2, dim=True, dim_to=TITLE_DIM))
+        elif item["type"] == "impact_text":
+            image = text_image(text, FONT_SANS_VF, int(height * IMPACT_SIZE), int(width * 0.7),
+                               IMPACT_COLORS[color % len(IMPACT_COLORS)], BLACK, 0.085)
+            # 살짝 기울여야 손으로 붙인 듯한 예능 자막 느낌이 난다.
+            image = image.rotate(4 if color % 2 else -4, expand=True, resample=Image.BICUBIC)
+            color += 1
+            avoid = layout.zones_during(people, item["start"], item["end"]) + [layout.subtitle_band(width, height)]
+            x, y, scale = layout.place(image.width, image.height, width, height, avoid, unit * 3, layout.TEXT_SPOTS, (1.0, 0.8, 0.65))
+            if scale < 1:
+                image = image.resize((int(image.width * scale), int(image.height * scale)), Image.LANCZOS)
+            layers.append(Layer(item["start"], item["end"], _to_bgra(image), x, y))
+    return layers
+
+
+class CaptionTrack:
+    """화면 자막. 영상이 길면 줄 수가 많아 미리 다 그리지 않고 나올 때 그린다."""
+
+    def __init__(self, items: list[dict], width: int, height: int) -> None:
+        self.items = sorted(items, key=lambda item: item["start"])
+        self.width, self.height = width, height
+        self.index = 0
+        self.current: tuple[int, Layer] | None = None
+
+    def layer_at(self, t: float) -> Layer | None:
+        while self.index < len(self.items) and self.items[self.index]["end"] < t:
+            self.index += 1
+        if self.index >= len(self.items) or self.items[self.index]["start"] > t:
+            return None
+        item = self.items[self.index]
+        if self.current is None or self.current[0] != item["id"]:
+            # 외곽선이 두꺼우면 작은 글자의 획 안쪽이 메워져 'ㄹㅇ' 같은 말이 안 읽힌다.
+            image = text_image(item["text"], FONT_SANS_VF, int(self.height * CAPTION_SIZE), int(self.width * TEXT_WIDTH),
+                               WHITE, BLACK, 0.075, weight=800)
+            x, y = (self.width - image.width) // 2, int(self.height * CAPTION_BOTTOM) - image.height
+            self.current = (item["id"], Layer(item["start"], item["end"], _to_bgra(image), x, y, animate=False))
+        return self.current[1]
+
+
+def build_layers(plan: dict, image_dir: Path, position: str, width: int, height: int, log: LogFn,
+                 people: list[dict] | None = None, subtitles: bool = False) -> list[Layer]:
     unit = max(4, height // 90)
     layers: list[Layer] = []
+    band = [layout.subtitle_band(width, height)] if subtitles else []
 
     def open_image(path: Path | None) -> Image.Image | None:
         if not path or not path.exists():
@@ -133,17 +245,25 @@ def build_layers(plan: dict, image_dir: Path, position: str, width: int, height:
         art, logo = generated(item), logo_of(item)
         if art is None or not item.get("enabled", True):
             continue
-        card, x, y, dim = _place_illustration(art, item.get("label", "").strip(), logo, position, width, height, unit)
+        avoid = layout.zones_during(people, item["start"], item["end"]) + band
+        card, x, y, dim = _place_illustration(art, item.get("label", "").strip(), logo, position, width, height, unit, avoid)
         layers.append(Layer(item["start"], item["end"], _to_bgra(card), x, y, dim))
 
     chip_size = int(height * 0.17)
+    placed: list[tuple[float, float, tuple]] = []
     for item in plan.get("overlays", []):
         art = generated(item) or logo_of(item)
         if art is None or not item.get("enabled", True):
             continue
+        start, end = item["start"], item["end"]
         chip = build_chip(art, chip_size, unit)
-        layers.append(Layer(item["start"], item["end"], _to_bgra(chip), width - chip.width - unit * 3, unit * 3))
-    return layers
+        avoid = layout.zones_during(people, start, end) + band + [rect for s, e, rect in placed if s < end and e > start]
+        x, y, scale = layout.place(chip.width, chip.height, width, height, avoid, unit * 3)
+        if scale < 1:
+            chip = build_chip(art, int(chip_size * scale), unit)
+        placed.append((start, end, (x, y, x + chip.width, y + chip.height)))
+        layers.append(Layer(start, end, _to_bgra(chip), x, y))
+    return layers + _effect_layers(plan.get("effects", []), people, width, height, unit)
 
 
 def _blend(frame: np.ndarray, bgr: np.ndarray, alpha: np.ndarray, x: int, y: int, opacity: float) -> None:
@@ -160,6 +280,9 @@ def _blend(frame: np.ndarray, bgr: np.ndarray, alpha: np.ndarray, x: int, y: int
 
 
 def _draw_layer(frame: np.ndarray, layer: Layer, t: float) -> None:
+    if not layer.animate:
+        _blend(frame, layer.bgr, layer.alpha, layer.x, layer.y, 1.0)
+        return
     into, left = t - layer.start, layer.end - t
     opacity, scale = 1.0, 1.0
     if into < POP_IN:
@@ -169,7 +292,7 @@ def _draw_layer(frame: np.ndarray, layer: Layer, t: float) -> None:
     elif left < FADE_OUT:
         opacity = max(0.0, left / FADE_OUT)
     if layer.dim:
-        frame[:] = cv2.convertScaleAbs(frame, alpha=1.0 - (1.0 - DIM) * opacity)
+        frame[:] = cv2.convertScaleAbs(frame, alpha=1.0 - (1.0 - layer.dim_to) * opacity)
     bgr, alpha, x, y = layer.bgr, layer.alpha, layer.x, layer.y
     if scale < 1.0:
         height, width = bgr.shape[:2]
@@ -196,7 +319,8 @@ def pixelate(frame: np.ndarray, rect: tuple[int, int, int, int]) -> None:
 
 
 def render_final(source: Path, info: dict, keeps: list[list[int]], layers: list[Layer], tracks: list[dict],
-                 audio: Path | None, target: Path, workdir: Path, crf: int, log: LogFn, runner: Runner) -> None:
+                 audio: Path | None, target: Path, workdir: Path, crf: int, log: LogFn, runner: Runner,
+                 effects: FrameEffects | None = None, captions: CaptionTrack | None = None) -> None:
     width, height, fps = info["width"], info["height"], info["fps"]
     frame_size = width * height * 3
     total = sum(last - first + 1 for first, last in keeps)
@@ -215,12 +339,19 @@ def render_final(source: Path, info: dict, keeps: list[list[int]], layers: list[
             t = index / fps
             active_tracks = [track for track in tracks if track["start"] <= t <= track["end"]]
             active_layers = [layer for layer in layers if layer.start <= t <= layer.end]
-            if active_tracks or active_layers:
+            active_effects = effects.active(t) if effects else []
+            caption = captions.layer_at(t) if captions else None
+            if active_tracks or active_layers or active_effects or caption:
                 frame = np.frombuffer(buffer, np.uint8).reshape(height, width, 3).copy()
+                # 순서가 중요하다. 확대와 정지 효과가 모자이크 뒤에 와야 가린 내용이 드러나지 않는다.
                 for track in active_tracks:
                     pixelate(frame, rect_at(track, t))
+                if active_effects:
+                    effects.apply(frame, t, active_effects)
                 for layer in active_layers:
                     _draw_layer(frame, layer, t)
+                if caption:
+                    _draw_layer(frame, caption, t)
                 encoder.stdin.write(frame.tobytes())
             else:
                 encoder.stdin.write(buffer)

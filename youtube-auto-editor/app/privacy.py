@@ -16,7 +16,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import claude
+from . import llm
 from .config import MODELS
 from .media import LogFn, Runner, iter_frames
 
@@ -349,7 +349,7 @@ def scan_video(video: Path, info: dict, options: dict, log: LogFn, runner: Runne
     width, height = info["width"], info["height"]
     ocr = OcrEngine((width, height)) if options["mosaic"] else None
     faces = FaceFinder(width, height, log) if options["face_mosaic"] else None
-    use_claude = options["pii_claude"] and ocr is not None and claude.available()
+    use_ai = options["pii_claude"] and ocr is not None and llm.available()
 
     samples: list[tuple[float, list[dict]]] = []
     frames_lines: list[tuple[float, list[tuple[Rect, str]], list[dict]]] = []
@@ -372,16 +372,16 @@ def scan_video(video: Path, info: dict, options: dict, log: LogFn, runner: Runne
     log(f"OCR 프레임 {scanned}장 처리 (샘플 {total}장 중, 나머지는 화면이 같아 재사용)")
 
     extra: dict[str, list[dict]] = {}
-    if use_claude:
+    if use_ai:
         unique = sorted({text for _, lines_at, _ in frames_lines for _, text in lines_at if re.search(r"[가-힣A-Za-z]{2}", text)})
         if unique:
-            log(f"Claude 보조 판별: 화면 글자 {len(unique)}줄 전송")
+            log(f"AI 보조 판별: 화면 글자 {len(unique)}줄 전송")
             try:
-                for item in claude.find_pii(unique):
+                for item in llm.find_pii(unique):
                     if 0 <= item["id"] < len(unique):
                         extra.setdefault(unique[item["id"]], []).append({"text": item["text"], "kind": item["kind"] or "이름"})
-            except claude.ClaudeError as error:
-                log(f"Claude 보조 판별 실패, 규칙 탐지 결과만 씁니다: {error}")
+            except llm.LLMError as error:
+                log(f"AI 보조 판별 실패, 규칙 탐지 결과만 씁니다: {error}")
 
     for time, lines_at, face_dets in frames_lines:
         samples.append((time, _line_detections(lines_at, width, height, extra) + list(face_dets)))
@@ -403,7 +403,7 @@ def rect_at(track: dict, t: float) -> Rect:
     return tuple(points[-1][1])
 
 
-def find_spoken_pii(segments: list[dict], use_claude: bool, log: LogFn) -> list[dict]:
+def find_spoken_pii(segments: list[dict], use_ai: bool, log: LogFn) -> list[dict]:
     """음성으로 말한 개인정보의 구간. 시각은 컷 편집본 기준이다."""
     words = [w for s in segments for w in s["words"] if not w["removed"]]
     spans: list[dict] = []
@@ -426,13 +426,13 @@ def find_spoken_pii(segments: list[dict], use_claude: bool, log: LogFn) -> list[
     for match in re.finditer(r"(?:[공영일이삼사오육칠팔구]{2,}\s*){3,}", joined):
         add(word_at(match.start()), word_at(match.end() - 2), "숫자 나열", match.group().strip())
 
-    if use_claude and joined.strip():
+    if use_ai and joined.strip():
         try:
             lines = [s["text"] for s in segments if s["text"]]
-            for item in claude.find_pii(lines):
+            for item in llm.find_pii(lines):
                 position = joined.find(item["text"])
                 if position >= 0:
                     add(word_at(position), word_at(position + len(item["text"]) - 1), item["kind"], item["text"])
-        except claude.ClaudeError as error:
-            log(f"Claude 음성 판별 실패, 규칙 탐지 결과만 씁니다: {error}")
+        except llm.LLMError as error:
+            log(f"AI 음성 판별 실패, 규칙 탐지 결과만 씁니다: {error}")
     return spans

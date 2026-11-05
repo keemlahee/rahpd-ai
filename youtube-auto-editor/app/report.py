@@ -3,9 +3,7 @@ from __future__ import annotations
 
 from .images import find_logo
 
-MAX_CHARS = 36
-MAX_SECONDS = 6.0
-TYPE_NAMES = {"silence": "무음", "filler": "추임새", "stutter": "말더듬", "sound": "짧은 소리"}
+TYPE_NAMES ={"silence": "무음", "filler": "추임새", "stutter": "말더듬", "sound": "짧은 소리"}
 
 
 def _srt_time(seconds: float) -> str:
@@ -21,24 +19,10 @@ def clock(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
-def build_srt(segments: list[dict]) -> str:
-    """컷 편집 후 남은 단어로 자막을 나눈다. 시각은 최종 영상 기준이다."""
-    blocks, chunk = [], []
-
-    def flush() -> None:
-        if chunk:
-            text = " ".join(w["word"] for w in chunk)
-            blocks.append(f"{len(blocks) + 1}\n{_srt_time(chunk[0]['start'])} --> {_srt_time(chunk[-1]['end'])}\n{text}\n")
-            chunk.clear()
-
-    for segment in segments:
-        for word in (w for w in segment["words"] if not w["removed"]):
-            length = sum(len(w["word"]) + 1 for w in chunk) + len(word["word"])
-            if chunk and (length > MAX_CHARS or word["end"] - chunk[0]["start"] > MAX_SECONDS):
-                flush()
-            chunk.append(word)
-        flush()
-    return "\n".join(blocks)
+def build_srt(items: list[dict]) -> str:
+    """화면에 입힌 자막과 같은 내용의 SRT. 시각은 최종 영상 기준이다."""
+    return "\n".join(f"{index}\n{_srt_time(item['start'])} --> {_srt_time(item['end'])}\n{item['text']}\n"
+                     for index, item in enumerate(items, 1))
 
 
 def summarize(state: dict) -> dict:
@@ -52,6 +36,8 @@ def summarize(state: dict) -> dict:
         "cuts": {name: sum(c["type"] == kind for c in enabled) for kind, name in TYPE_NAMES.items()},
         "illustrations": sum(1 for i in plan["illustrations"] if i.get("image") and i.get("enabled", True)),
         "overlays": sum(1 for i in plan["overlays"] if (i.get("image") or find_logo(i.get("logo", ""))) and i.get("enabled", True)),
+        "effects": sum(1 for i in plan.get("effects", []) if i.get("enabled", True)),
+        "subtitles": state["subtitles"],
         "mosaics": sum(1 for t in pii["tracks"] if t["enabled"]),
         "muted": sum(1 for s in pii["speech"] if s["enabled"]),
         "warnings": state["warnings"],
@@ -64,7 +50,8 @@ def build_markdown(name: str, summary: dict, state: dict) -> str:
         f"- 원본 길이: {summary['source_duration']}초",
         f"- 편집 후 길이: {summary['final_duration']}초 ({summary['saved']}초 단축)",
         "- 컷: " + ", ".join(f"{k} {v}곳" for k, v in summary["cuts"].items()),
-        f"- 설명 일러스트 {summary['illustrations']}개, 로고·아이콘 {summary['overlays']}개",
+        f"- 설명 일러스트 {summary['illustrations']}개, 로고·아이콘 {summary['overlays']}개, 예능 효과 {summary['effects']}개",
+        f"- 화면 자막 {summary['subtitles']}줄",
         f"- 화면 모자이크 {summary['mosaics']}곳, 음성 음소거 {summary['muted']}곳", "",
     ]
     if summary["warnings"]:

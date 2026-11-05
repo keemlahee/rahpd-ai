@@ -20,8 +20,8 @@ import numpy as np
 import openai
 from PIL import Image
 
-from . import claude
-from .config import LOGOS, OPENAI_KEY, get_key
+from . import llm
+from .config import CLAUDE_KEY, LOGOS, OPENAI_KEY, get_key
 from .media import LogFn, Runner
 
 STYLE = (
@@ -39,7 +39,7 @@ _opaque_only: set[str] = set()  # 투명 배경을 거절한 모델. 같은 실�
 
 def resolve_provider(choice: str) -> str:
     """'auto'는 OpenAI 키를 우선 쓰고, 없으면 Claude가 그린 SVG로 대신한다."""
-    has_openai, has_claude = bool(get_key(OPENAI_KEY)), claude.available()
+    has_openai, has_claude = bool(get_key(OPENAI_KEY)), bool(get_key(CLAUDE_KEY))
     if choice == "openai":
         return "openai" if has_openai else ""
     if choice == "claude":
@@ -135,7 +135,7 @@ def _openai_image(prompt: str, size: str, quality: str) -> bytes:
 def _claude_image(prompt: str, width: int, height: int) -> bytes:
     import resvg_py
 
-    svg = claude.draw_svg(prompt, width, height)
+    svg = llm.draw_svg(prompt, width, height)
     return bytes(resvg_py.svg_to_bytes(svg_string=svg, width=width * 2))
 
 
