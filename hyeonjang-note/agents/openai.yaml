@@ -1,0 +1,3 @@
+interface:
+  display_name: "현장노트"
+  short_description: "배관 현장 관리 웹앱을 만들고 수정합니다"

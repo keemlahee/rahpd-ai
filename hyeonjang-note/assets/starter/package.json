@@ -1,0 +1,9 @@
+{
+  "name": "hyeonjang-note",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": { "start": "node server.mjs", "build": "node build.mjs", "package:site": "node package-site.mjs", "db:generate": "drizzle-kit generate", "test": "node --test test/*.test.mjs", "check": "node --check server.mjs && node --check public/app.js" },
+  "devDependencies": { "drizzle-kit": "0.31.4", "drizzle-orm": "0.44.5" }
+}

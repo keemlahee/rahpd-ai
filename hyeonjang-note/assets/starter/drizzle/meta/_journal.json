@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1790083866356,
+      "tag": "0000_faulty_maelstrom",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790238871252,
+      "tag": "0001_loving_agent_zero",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790240491155,
+      "tag": "0002_lovely_salo",
+      "breakpoints": true
+    }
+  ]
+}

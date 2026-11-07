@@ -1,0 +1,7 @@
+data/
+node_modules/
+.env
+*.log
+dist/
+.sites-runtime/
+.wrangler/
